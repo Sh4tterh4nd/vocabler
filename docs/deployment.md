@@ -43,8 +43,8 @@ Published tags:
 
 | Trigger | Tags |
 | --- | --- |
-| Default branch | `edge`, `sha-<full commit>` |
-| Version tag such as `v1.2.3` | `v1.2.3`, `1.2.3`, `1.2`, `sha-<full commit>`; `latest` for stable semantic releases |
+| Default branch | `nightly`, `edge`, `sha-<full commit>` |
+| Version tag such as `v1.2.3` | `nightly`, `v1.2.3`, `1.2.3`, `1.2`, `sha-<full commit>`; `latest` for stable semantic releases |
 
 To release a version, commit the changes and push a version tag, for example:
 
@@ -53,7 +53,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-A manual workflow run on the default branch can also publish an `edge` image. Creating the workflow file does not itself publish an image or create a GitHub repository.
+Every successful publish updates `nightly` to that image, including version-tag releases and manual runs on the default branch. This is a moving tag for the most recently published image; publication is triggered by pushes/manual runs rather than a daily schedule. A manual workflow run on the default branch can also publish an `edge` image. Creating the workflow file does not itself publish an image or create a GitHub repository.
 
 The new GHCR package may initially be private. To deploy a private package, authenticate the deployment machine with an account/token that has package read access using `docker login ghcr.io`. Alternatively, explicitly make the package public in GitHub if that is your intended distribution model.
 

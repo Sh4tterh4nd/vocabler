@@ -108,6 +108,7 @@ jobs:
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
+            type=raw,value=nightly
             type=edge,branch=${{ github.event.repository.default_branch }}
             type=sha,format=long
             type=ref,event=tag
