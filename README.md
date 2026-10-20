@@ -18,11 +18,14 @@ Vocabulary and packages are private by default. A language pair belongs to its c
 
 ## Docker and GitHub releases
 
-Copy `.env.example` to `.env`, set `POSTGRES_PASSWORD`, then build and start the app with PostgreSQL:
+Container images are built with the [Jib Gradle plugin](https://github.com/GoogleContainerTools/jib/tree/master/jib-gradle-plugin). Install a JDK (21 or newer) and Docker with Compose. Copy `.env.example` to `.env`, set `POSTGRES_PASSWORD`, then build the local image and start PostgreSQL and the app:
 
 ```sh
-docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
+sh gradlew jibDockerBuild
+docker compose up -d --no-build --wait
 ```
+
+On Windows, use `.\gradlew.bat jibDockerBuild`. Jib defaults to `vocabler:local`; image building needs no Dockerfile. To build an archive without a Docker daemon, run `sh gradlew jibBuildTar` (output: `build/jib-image.tar`).
 
 The GitHub Actions workflow tests H2 and PostgreSQL, builds and smoke-tests the container, and publishes images to `ghcr.io/<owner>/<repository>` from the default branch and `v*` release tags. Released images support AMD64 and ARM64. For deployment, set `VOCABLER_IMAGE` in `.env`, then run `docker compose pull` and `docker compose up -d --no-build --wait`.
 

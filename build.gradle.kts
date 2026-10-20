@@ -1,11 +1,16 @@
 plugins {
     java
     id("org.springframework.boot") version "4.1.1"
+    id("com.google.cloud.tools.jib") version "3.5.4"
 }
 
 group = "com.vocabler"
 version = "0.0.1-SNAPSHOT"
 description = "Family vocabulary learning"
+
+springBoot {
+    mainClass = "com.vocabler.VocablerApplication"
+}
 
 repositories {
     mavenCentral()
@@ -80,4 +85,30 @@ tasks.register<Test>("postgresTest") {
     shouldRunAfter(tasks.test)
     // Database state is external; this task must actually execute on every invocation.
     outputs.upToDateWhen { false }
+}
+
+jib {
+    from {
+        image = "eclipse-temurin:21-jre-jammy"
+    }
+    to {
+        image = "vocabler:local"
+    }
+    container {
+        mainClass = "com.vocabler.VocablerApplication"
+        user = "10001:10001"
+        workingDirectory = "/app"
+        ports = listOf("8080")
+        jvmFlags = listOf("-XX:MaxRAMPercentage=75.0")
+        labels = buildMap {
+            put("org.opencontainers.image.title", "Vocabler")
+            providers.environmentVariable("GITHUB_REPOSITORY").orNull?.let {
+                val server = providers.environmentVariable("GITHUB_SERVER_URL").getOrElse("https://github.com")
+                put("org.opencontainers.image.source", "$server/$it")
+            }
+            providers.environmentVariable("GITHUB_SHA").orNull?.let {
+                put("org.opencontainers.image.revision", it)
+            }
+        }
+    }
 }

@@ -2,18 +2,23 @@
 
 ## Local Compose build
 
-Docker Desktop / Docker Engine and Docker Compose are required. A local JDK or Gradle installation is not needed for a container build.
+Install a JDK (21 or newer), Docker Desktop / Docker Engine, and Docker Compose. The Gradle wrapper supplies Gradle; no separate Gradle installation is required. Images are built by the [Jib Gradle plugin](https://github.com/GoogleContainerTools/jib/tree/master/jib-gradle-plugin), configured in `build.gradle.kts`.
 
 1. Copy `.env.example` to `.env` and set a nonempty `POSTGRES_PASSWORD`.
 2. From the repository root, run:
 
 ```sh
-docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
+sh gradlew jibDockerBuild
+docker compose up -d --no-build --wait
 ```
 
-Open http://localhost:8080. The application is built from source in a Java 21 build stage and runs as a non-root user in a Java 21 JRE image. The runtime filesystem is read-only in Compose, with temporary storage at `/tmp`.
+On Windows, use `.\gradlew.bat jibDockerBuild` for the first command. Open http://localhost:8080. Jib layers the dependencies, resources, and compiled classes onto `eclipse-temurin:21-jre-jammy` and runs Java directly as UID/GID `10001:10001`. Compose makes the runtime filesystem read-only, with temporary storage at `/tmp`. Re-run the Jib task after source changes, then `docker compose up -d --no-build --wait` to recreate the app with the new image.
 
-The local override uses `vocabler:local`. The base `compose.yaml` uses `VOCABLER_IMAGE`, which can be changed to a published GHCR image without rebuilding it.
+Jib defaults to `vocabler:local`, matching the Compose default. Keep `VOCABLER_IMAGE=vocabler:local` in `.env` for local builds. To target another name, use `sh gradlew jibDockerBuild --image=your-name:tag` and set `VOCABLER_IMAGE` to the same name.
+
+`jibDockerBuild` loads the image into the local Docker daemon. To build without Docker, run `sh gradlew jibBuildTar`; the archive is `build/jib-image.tar` and can later be loaded with `docker load --input build/jib-image.tar`. These tasks default to Linux AMD64. On an ARM64 Docker host, pass `"-Djib.from.platforms=linux/arm64"`. Registry publishing uses `sh gradlew jib --image=registry/owner/image:tag` and needs registry credentials but no Docker daemon. Jib supports Docker login credentials and credential helpers. If Docker Hub rejects the base-image pull, refresh that login with `docker login`; stale saved credentials can also prevent pulling a public image.
+
+The image expects an externally configured database, as supplied by Compose. For a standalone `docker run`, set `VOCABLER_DB_URL`, `VOCABLER_DB_USER`, and `VOCABLER_DB_PASSWORD`. Container health checks are configured in Compose rather than embedded in the image; other runtimes can use `/actuator/health/readiness` as an HTTP probe.
 
 The `db` service uses PostgreSQL 18. It has no published host port. The `postgres_data` named volume is mounted at `/var/lib/postgresql`, the correct parent location for the PostgreSQL 18 official image. See the [official image documentation](https://hub.docker.com/_/postgres).
 
@@ -27,12 +32,12 @@ Every branch push and pull request runs:
 
 1. The Gradle build and H2 tests on Java 21.
 2. The application integration tests and upgrade migrations against a real PostgreSQL 18 service.
-3. A Docker image build.
+3. A Jib image build into the runner's Docker daemon (`jibDockerBuild`).
 4. A Compose smoke test with a fresh PostgreSQL database and database-aware readiness checks.
 
-Test reports are retained as workflow artifacts for seven days. Third-party Actions are pinned to full commit IDs. Dependabot is configured to propose updates for those Actions, Docker base images, and Gradle dependencies.
+Test reports are retained as workflow artifacts for seven days. Third-party Actions are pinned to full commit IDs. Dependabot is configured to propose updates for those Actions and Gradle dependencies, including Jib. The Java base image is configured in Gradle; review its tag/digest separately from dependency updates.
 
-After the test job succeeds, the default branch and version tags publish `linux/amd64` and `linux/arm64` images to GHCR. Pull requests and other branch pushes do not publish. The publish job uses the repository-provided `GITHUB_TOKEN` with `packages: write`; no registry secret is needed. The workflow configures the same GHCR login mechanism described in the [GitHub publishing guide](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
+After the test job succeeds, the default branch and version tags publish `linux/amd64` and `linux/arm64` images to GHCR. Pull requests and other branch pushes do not publish. The publish job uses the repository-provided `GITHUB_TOKEN` with `packages: write`; no registry secret is needed. Jib reads the GHCR credentials configured by `docker/login-action` and publishes both platforms in one registry manifest list using `jib`. Image building and publishing require neither Buildx nor QEMU. The image includes source and revision labels linking it to the GitHub repository. Jib does not produce BuildKit SBOM/provenance attestations.
 
 Published tags:
 
@@ -71,7 +76,7 @@ For a later upgrade, change the image tag (or pin an immutable `@sha256:...` dig
 
 Compose binds the application to `127.0.0.1:8080` by default. For access from family devices, serve it through an HTTPS reverse proxy and set `VOCABLER_SECURE_COOKIE=true`. Forwarded headers are enabled in Compose for that proxy. Keep direct application access restricted to the proxy; only trust forwarded headers from that route. PWA installation outside localhost requires HTTPS.
 
-The public `/actuator/health/liveness` and `/actuator/health/readiness` endpoints return status only. Readiness includes a database check and is used by the Docker health check. Other Actuator endpoints are not publicly exposed.
+The public `/actuator/health/liveness` and `/actuator/health/readiness` endpoints return status only. Readiness includes a database check. Compose invokes the dependency-free `com.vocabler.ReadinessCheck` Java probe, which exits successfully only for HTTP 200 from the readiness endpoint. No curl installation is needed inside the image. Other Actuator endpoints are not publicly exposed.
 
 There is no automatic remote-server deployment job: CI publishes the image, and Compose pulls/runs it on the deployment machine. Sessions are currently held in memory, so replacing/restarting the application requires users to log in again. Run one app replica until shared sessions are introduced.
 
@@ -110,4 +115,4 @@ docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 docker compose cp db:/tmp/vocabler.dump ./vocabler.dump
 ```
 
-Store backups outside the container/volume and use distinct backup filenames. Database backups and actual `.env` files are ignored by Git and the Docker build context. Restore with a matching PostgreSQL `pg_restore` into an appropriate empty database; test the restore procedure before relying on backups.
+Store backups outside the container/volume and use distinct backup filenames. Database backups and actual `.env` files are ignored by Git. Jib packages the application classes, resources, and dependencies; these files are outside its image inputs. Restore with a matching PostgreSQL `pg_restore` into an appropriate empty database; test the restore procedure before relying on backups.
