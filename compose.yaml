@@ -1,0 +1,50 @@
+services:
+  app:
+    image: ${VOCABLER_IMAGE:-vocabler:local}
+    restart: unless-stopped
+    ports:
+      - "${VOCABLER_BIND_ADDRESS:-127.0.0.1}:${VOCABLER_PORT:-8080}:8080"
+    environment:
+      VOCABLER_DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-vocabler}
+      VOCABLER_DB_USER: ${POSTGRES_USER:-vocabler}
+      VOCABLER_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      VOCABLER_SECURE_COOKIE: ${VOCABLER_SECURE_COOKIE:-false}
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vocabler}
+      POSTGRES_USER: ${POSTGRES_USER:-vocabler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:

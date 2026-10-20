@@ -1,0 +1,7 @@
+# Local source build: docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
+services:
+  app:
+    image: vocabler:local
+    pull_policy: build
+    build:
+      context: .

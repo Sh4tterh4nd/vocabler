@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0c617e" />
+    <meta
+      name="description"
+      content="Private vocabulary collections, shared only when you choose."
+    />
+    <title>Vocabler</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Vocabler home"
+        ><img src="/icon.svg" alt="" width="36" height="36" />vocabler</a
+      >
+      <div id="account" hidden>
+        <span id="username"></span
+        ><button id="logout" class="quiet">Log out</button>
+      </div>
+    </header>
+    <main>
+      <p id="status" role="status" aria-live="polite" hidden></p>
+      <section id="auth" class="auth-layout">
+        <div class="intro">
+          <h1>A few words,<br />every day.</h1>
+          <p>
+            Build your own vocabulary collection.<br />Learn at your own pace,
+            in either direction.
+          </p>
+          <div class="word-sample" aria-hidden="true">
+            <span>Bună dimineața</span><span>Guten Morgen</span>
+          </div>
+        </div>
+        <form id="auth-form" class="auth-form">
+          <h2 id="auth-title">Welcome back</h2>
+          <p id="auth-description">Log in to pick up your next card.</p>
+          <label
+            >Username<input
+              name="username"
+              autocomplete="username"
+              required
+              minlength="3"
+              maxlength="40"
+              pattern="[A-Za-z0-9_-]+"
+              autocapitalize="none"
+              spellcheck="false"
+          /></label>
+          <label
+            >Password<input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              maxlength="72"
+          /></label>
+          <button id="auth-submit" type="submit">Log in</button>
+          <button id="auth-toggle" type="button" class="quiet">
+            New here? Create an account
+          </button>
+          <p class="small">
+            Your vocabulary is private. Share it with people you choose. Your
+            learning progress stays personal.
+          </p>
+        </form>
+      </section>
+      <section id="workspace" hidden>
+        <div class="workspace-heading">
+          <div>
+            <h1>Your word collection</h1>
+            <p>One collection. Two directions to explore.</p>
+          </div>
+          <button id="show-pair" class="secondary">Add language pair</button>
+        </div>
+        <form id="pair-form" class="inline-form" hidden>
+          <label
+            >First language<input
+              name="sourceLanguage"
+              required
+              maxlength="60"
+              placeholder="German"
+          /></label>
+          <label
+            >Second language<input
+              name="targetLanguage"
+              required
+              maxlength="60"
+              placeholder="Romanian"
+          /></label>
+          <button type="submit">Create pair</button
+          ><button id="cancel-pair" type="button" class="quiet">Cancel</button>
+        </form>
+        <div id="empty-pairs" class="empty" hidden>
+          <h2>Start with two languages</h2>
+          <p>
+            Add a language pair, then enter your first words or import a CSV.
+          </p>
+        </div>
+        <div id="pair-workspace" hidden>
+          <div class="selectors">
+            <label>Language pair<select id="pair-select"></select></label>
+            <label
+              >Practice direction<select id="direction">
+                <option value="FORWARD">Forward</option>
+                <option value="REVERSE">Reverse</option>
+              </select></label
+            >
+            <label
+              >Vocabulary package<select id="package-select">
+                <option value="">All words</option>
+              </select></label
+            >
+          </div>
+          <p id="pair-access" class="small"></p>
+          <details id="sharing-panel" class="sharing-panel" hidden>
+            <summary>Share vocabulary</summary>
+            <p>
+              Share every word and package in this language pair with selected
+              users. They can study the collection; you keep control of editing
+              and sharing.
+            </p>
+            <form id="share-form" class="share-form">
+              <label
+                >Username to share with<input
+                  name="username"
+                  required
+                  minlength="3"
+                  maxlength="40"
+                  pattern="[A-Za-z0-9_-]+"
+                  placeholder="An existing account's username"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+              /></label>
+              <button id="share-submit" type="submit">Share with user</button>
+            </form>
+            <p id="sharing-status" class="small" role="status"></p>
+            <ul id="share-list" class="share-list"></ul>
+          </details>
+          <nav class="tabs" aria-label="Workspace">
+            <button data-view="learn" aria-current="page">Learn</button
+            ><button data-view="vocabulary">Vocabulary</button
+            ><button data-view="settings">Learning settings</button>
+          </nav>
+          <section id="learn-view" class="learning-layout">
+            <aside class="learning-info">
+              <h2>A little practice<br />goes a long way.</h2>
+              <p id="learning-direction"></p>
+              <p id="active-count">Your learning list fills as you practice.</p>
+              <p class="small">
+                Each direction has its own score. Familiar words make room for
+                new ones, and return for an occasional review.
+              </p>
+              <button id="start-session">Start practicing</button>
+            </aside>
+            <div class="card-area">
+              <div id="card-placeholder" class="card-placeholder">
+                <span class="card-mark" aria-hidden="true">Aa</span>
+                <h3>Ready when you are</h3>
+                <p>Start practicing to reveal your next word.</p>
+              </div>
+              <div id="flashcard-wrap" hidden>
+                <p id="card-caption" class="card-caption"></p>
+                <button
+                  id="flashcard"
+                  class="flashcard"
+                  aria-label="Reveal translation"
+                >
+                  <span id="card-language" class="card-language"></span
+                  ><span id="card-word" class="card-word"></span
+                  ><span id="card-notes" class="card-notes"></span
+                  ><span id="card-hint" class="card-hint">Tap to reveal</span>
+                </button>
+                <div id="answer-actions" class="answer-actions" hidden>
+                  <button id="again" class="again">← Again</button
+                  ><button id="knew" class="knew">Knew it →</button>
+                </div>
+                <p id="gesture-hint" class="small centered">
+                  Reveal first. Then swipe left for “Again” or right for “Knew
+                  it”.
+                </p>
+              </div>
+            </div>
+          </section>
+          <section id="vocabulary-view" hidden>
+            <div class="section-heading">
+              <h2>Words to make your own</h2>
+              <span id="word-count" class="small"></span>
+            </div>
+            <div id="catalog-editor" class="editor-layout">
+              <form id="entry-form">
+                <h3>Add a word</h3>
+                <label id="source-label"
+                  >First language<input
+                    name="sourceText"
+                    required
+                    maxlength="200" /></label
+                ><label id="target-label"
+                  >Second language<input
+                    name="targetText"
+                    required
+                    maxlength="200" /></label
+                ><label
+                  >Notes <span class="optional">(optional)</span
+                  ><input
+                    name="notes"
+                    maxlength="1000"
+                    placeholder="An example sentence or a helpful hint" /></label
+                ><button type="submit">Add word</button>
+                <p class="small">Add words to packages using the list below.</p>
+              </form>
+              <div class="collection-tools">
+                <form id="package-form">
+                  <h3>Create a package</h3>
+                  <label
+                    >Package name<input
+                      name="name"
+                      required
+                      maxlength="100"
+                      placeholder="At the dinner table" /></label
+                  ><button type="submit" class="secondary">
+                    Create package
+                  </button>
+                </form>
+                <form id="import-form">
+                  <h3>Import CSV</h3>
+                  <p class="small">
+                    UTF-8, with headers <code>source,target,notes</code>. Notes
+                    are optional. Up to 5,000 rows.
+                  </p>
+                  <label
+                    >CSV file<input
+                      id="csv-file"
+                      type="file"
+                      accept=".csv,text/csv"
+                      required
+                  /></label>
+                  <p class="small">
+                    Import into the selected package, or into all words.
+                  </p>
+                  <button type="submit" class="secondary">
+                    Preview import
+                  </button>
+                </form>
+              </div>
+            </div>
+            <section id="import-preview" class="import-preview" hidden>
+              <h3>Import preview</h3>
+              <p id="import-summary"></p>
+              <ul id="import-errors"></ul>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Row</th>
+                      <th>First language</th>
+                      <th>Second language</th>
+                      <th>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody id="preview-rows"></tbody>
+                </table>
+              </div>
+              <button id="commit-import">Import vocabulary</button>
+            </section>
+            <div class="word-toolbar">
+              <label
+                >Find a word<input
+                  id="search"
+                  type="search"
+                  placeholder="Search translations or notes" /></label
+              ><label
+                >Add selected words to<select
+                  id="assign-package"
+                ></select></label
+              ><button id="assign-words" class="secondary">
+                Add to package</button
+              ><button id="remove-words" class="quiet" hidden>
+                Remove from this package
+              </button>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>
+                      <input
+                        id="select-page"
+                        type="checkbox"
+                        aria-label="Select words on this page"
+                      />
+                    </th>
+                    <th id="source-heading">First language</th>
+                    <th id="target-heading">Second language</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody id="entry-rows"></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <button id="previous-page" class="quiet">Previous</button
+              ><span id="page-label"></span
+              ><button id="next-page" class="quiet">Next</button>
+            </div>
+          </section>
+          <section id="settings-view" hidden>
+            <form id="settings-form" class="settings-form">
+              <h2>Your learning rhythm</h2>
+              <p>
+                These settings apply to your account, across language pairs and
+                directions.
+              </p>
+              <label
+                >Active words per direction<input
+                  name="activeLimit"
+                  type="number"
+                  min="10"
+                  max="200"
+                  required /></label
+              ><label
+                >Graduate at score<input
+                  name="graduationScore"
+                  type="number"
+                  min="1"
+                  max="9.9"
+                  step="0.1"
+                  required /></label
+              ><label
+                >Score gained for a correct answer<input
+                  name="correctGain"
+                  type="number"
+                  min="0.1"
+                  max="5"
+                  step="0.1"
+                  required /></label
+              ><label
+                >Score lost for an incorrect answer<input
+                  name="incorrectPenalty"
+                  type="number"
+                  min="0.1"
+                  max="10"
+                  step="0.1"
+                  required /></label
+              ><label
+                >Daily score decay above 8<input
+                  name="dailyDecay"
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.01"
+                  required
+              /></label>
+              <p class="small">
+                Decay stops at 8. Set it to 0 to disable decay. Changes to decay
+                use the time since each word’s last review. Words at 10 return
+                only after decay and their next scheduled review.
+              </p>
+              <button type="submit">Save settings</button>
+            </form>
+          </section>
+        </div>
+      </section>
+    </main>
+    <footer>
+      Vocabler · Small steps, a growing vocabulary.<span
+        id="connection-status"
+      ></span>
+    </footer>
+  </body>
+</html>

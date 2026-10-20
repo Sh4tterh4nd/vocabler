@@ -1,0 +1,10 @@
+/.gradle/
+/build/
+/target/
+/.idea/
+*.iml
+/data/
+.env
+*.log
+/backups/
+*.dump
