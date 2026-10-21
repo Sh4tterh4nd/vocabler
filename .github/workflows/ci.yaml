@@ -55,16 +55,16 @@ jobs:
         run: sh gradlew --no-daemon jibDockerBuild --image=vocabler:ci
       - name: Validate Compose and smoke-test container with PostgreSQL
         run: |
-          docker compose -p vocabler-ci config --quiet
-          docker compose -p vocabler-ci up -d --wait --wait-timeout 120
+          docker compose -f compose.ci.yaml -p vocabler-ci config --quiet
+          docker compose -f compose.ci.yaml -p vocabler-ci up -d --wait --wait-timeout 120
           curl --fail --retry 5 --retry-delay 2 http://127.0.0.1:18080/actuator/health/readiness
           curl --fail http://127.0.0.1:18080/ | grep -q '<title>Vocabler</title>'
       - name: Container diagnostics
         if: failure()
-        run: docker compose -p vocabler-ci logs --no-color
+        run: docker compose -f compose.ci.yaml -p vocabler-ci logs --no-color
       - name: Remove temporary CI containers and test database
         if: always()
-        run: docker compose -p vocabler-ci down --volumes --remove-orphans
+        run: docker compose -f compose.ci.yaml -p vocabler-ci down --volumes --remove-orphans
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

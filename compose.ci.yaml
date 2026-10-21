@@ -1,0 +1,47 @@
+# Standalone smoke-test stack. Does not load the production Traefik configuration.
+# Run with: docker compose -f compose.ci.yaml -p vocabler-ci up -d --wait
+services:
+  app:
+    image: ${VOCABLER_IMAGE:-vocabler:ci}
+    pull_policy: never
+    ports:
+      - "127.0.0.1:${VOCABLER_PORT:-18080}:8080"
+    environment:
+      VOCABLER_DB_URL: jdbc:postgresql://db:5432/vocabler
+      VOCABLER_DB_USER: vocabler
+      VOCABLER_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for the smoke-test database}
+      VOCABLER_SECURE_COOKIE: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:8080/actuator/health/readiness"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: vocabler
+      POSTGRES_USER: vocabler
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for the smoke-test database}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  postgres_data:

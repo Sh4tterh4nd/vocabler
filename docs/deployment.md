@@ -37,6 +37,20 @@ Every branch push and pull request runs:
 3. A Jib image build into the runner's Docker daemon (`jibDockerBuild`).
 4. A Compose smoke test with a fresh PostgreSQL database and database-aware readiness checks.
 
+The smoke test explicitly uses `compose.ci.yaml` for startup, diagnostics, and cleanup. It runs the locally built `vocabler:ci` image (`pull_policy: never`), exposes the app only on `127.0.0.1:18080`, and uses its own project network and database volume. It does not require Traefik or load the deployment's `compose.yaml`. Cleanup removes only this test project's containers and volume.
+
+To reproduce the container smoke test locally after building with `sh gradlew jibDockerBuild --image=vocabler:ci`, set `POSTGRES_PASSWORD` to a disposable test password, `VOCABLER_IMAGE=vocabler:ci`, and `VOCABLER_PORT=18080`, then run:
+
+```sh
+docker compose -f compose.ci.yaml -p vocabler-ci config --quiet
+docker compose -f compose.ci.yaml -p vocabler-ci up -d --wait --wait-timeout 120
+curl --fail http://127.0.0.1:18080/actuator/health/readiness
+curl --fail http://127.0.0.1:18080/
+docker compose -f compose.ci.yaml -p vocabler-ci down --volumes --remove-orphans
+```
+
+Use the same `POSTGRES_PASSWORD` for these commands. If startup fails, inspect `docker compose -f compose.ci.yaml -p vocabler-ci logs --no-color` before cleanup.
+
 Test reports are retained as workflow artifacts for seven days. Third-party Actions are pinned to full commit IDs. Dependabot is configured to propose updates for those Actions and Gradle dependencies, including Jib. The Java base image is configured in Gradle; review its tag/digest separately from dependency updates.
 
 After the test job succeeds, the default branch and version tags publish `linux/amd64` and `linux/arm64` images to GHCR. Pull requests and other branch pushes do not publish. The publish job uses the repository-provided `GITHUB_TOKEN` with `packages: write`; no registry secret is needed. Jib reads the GHCR credentials configured by `docker/login-action` and publishes both platforms in one registry manifest list using `jib`. Image building and publishing require neither Buildx nor QEMU. The image includes source and revision labels linking it to the GitHub repository. Jib does not produce BuildKit SBOM/provenance attestations.
