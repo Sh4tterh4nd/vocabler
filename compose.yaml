@@ -1,14 +1,23 @@
 services:
   app:
-    image: ${VOCABLER_IMAGE:-vocabler:local}
+    image:  ghcr.io/sh4tterh4nd/vocabler:latest
     restart: unless-stopped
-    ports:
-      - "${VOCABLER_BIND_ADDRESS:-127.0.0.1}:${VOCABLER_PORT:-8080}:8080"
+    labels:
+      traefik.enable: 'true'
+      traefik.http.routers.vocabler-secured.entrypoints: web-secured
+      traefik.http.routers.vocabler-secured.middlewares: default-https@file
+      traefik.http.routers.vocabler-secured.rule: Host(`vocab.kellermann.io`)
+      traefik.http.routers.vocabler-secured.tls.certresolver: mychallenge
+      traefik.http.services.vocabler-secured.loadbalancer.server.port: 8080
+
+    networks:
+      - vocabler
+      - traefik
     environment:
-      VOCABLER_DB_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-vocabler}
-      VOCABLER_DB_USER: ${POSTGRES_USER:-vocabler}
-      VOCABLER_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      VOCABLER_SECURE_COOKIE: ${VOCABLER_SECURE_COOKIE:-false}
+      VOCABLER_DB_URL: jdbc:postgresql://vocabler-postgres:5432/vocabler
+      VOCABLER_DB_USER: vocabler
+      VOCABLER_DB_PASSWORD: vocabler
+      VOCABLER_SECURE_COOKIE: false
       SERVER_FORWARD_HEADERS_STRATEGY: framework
     depends_on:
       db:
@@ -21,7 +30,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "java", "-cp", "/app/classes", "com.vocabler.ReadinessCheck"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "4", "http://127.0.0.1:8080/actuator/health/readiness"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -35,10 +44,14 @@ services:
   db:
     image: postgres:18-alpine
     restart: unless-stopped
+    networks:
+      vocabler:
+        aliases:
+          - vocabler-postgres
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-vocabler}
-      POSTGRES_USER: ${POSTGRES_USER:-vocabler}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: vocabler
+      POSTGRES_USER: vocabler
+      POSTGRES_PASSWORD: vocabler
     volumes:
       - postgres_data:/var/lib/postgresql
     healthcheck:
@@ -54,3 +67,8 @@ services:
 
 volumes:
   postgres_data:
+networks:
+  vocabler:
+    external: false
+  traefik:
+    external: true

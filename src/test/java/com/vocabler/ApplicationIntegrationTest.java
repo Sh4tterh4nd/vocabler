@@ -141,23 +141,23 @@ class ApplicationIntegrationTest {
     }
     @Test void csvPreviewDoesNotWriteAndCommitHandlesUnicodeQuotesAndDuplicates() {
         var upload = file("\uFEFFsource,target,notes\nApfel,măr,duplicate\n\"Guten Morgen\",\"Bună dimineața\",\"hello, family\"\nGuten Morgen,Bună dimineața,same\n");
-        var preview = csv.upload(owner, pairId, upload, false, null);
+        var preview = csv.upload(owner, pairId, upload, false, null, TranslationDirection.FORWARD);
         assertEquals(1, preview.newEntries()); assertEquals(2, preview.duplicates()); assertEquals(0, preview.errors());
         assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
-        csv.upload(owner, pairId, upload, true, null);
+        csv.upload(owner, pairId, upload, true, null, TranslationDirection.FORWARD);
         assertEquals(2, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
         assertEquals("hello, family", db.queryForObject("select notes from vocabulary_entry where source_text='Guten Morgen'", String.class));
     }
     @Test void invalidCsvCommitIsAtomic() {
         var upload = file("source,target\nWasser,apă\nMissing,\n");
-        assertEquals(1, csv.upload(owner, pairId, upload, false, null).errors());
-        assertThrows(ResponseStatusException.class, () -> csv.upload(owner, pairId, upload, true, null));
+        assertEquals(1, csv.upload(owner, pairId, upload, false, null, TranslationDirection.FORWARD).errors());
+        assertThrows(ResponseStatusException.class, () -> csv.upload(owner, pairId, upload, true, null, TranslationDirection.FORWARD));
         assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
     }
     @Test void csvCanAddExistingWordsToAPackage() {
         catalog.createPackage(owner, pairId, new CatalogController.PackageInput("Fruit"));
         long packageId = db.queryForObject("select id from vocabulary_package", Long.class);
-        csv.upload(owner, pairId, file("source,target\nApfel,măr\n"), true, packageId);
+        csv.upload(owner, pairId, file("source,target\nApfel,măr\n"), true, packageId, TranslationDirection.FORWARD);
         assertEquals(1, catalog.entries(owner, pairId, packageId).size());
     }
     @Test void packagesCannotContainEntriesFromOtherLanguagePairs() {
@@ -300,5 +300,225 @@ class ApplicationIntegrationTest {
         mvc.perform(get("/actuator/health/liveness")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP")).andExpect(jsonPath("$.components").doesNotExist());
         mvc.perform(get("/actuator/health/readiness")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP")).andExpect(jsonPath("$.components").doesNotExist());
         mvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
+    }
+
+    @Test void reverseCsvNormalizesBeforePreviewDuplicatesAndPackageAssignment() throws Exception {
+        catalog.createPackage(owner, pairId, new CatalogController.PackageInput("Imported"));
+        long packageId = db.queryForObject("select id from vocabulary_package", Long.class);
+        learning.review(alice, next(alice, TranslationDirection.FORWARD).card().ticket(), true);
+        var upload = file("source, target,notes\nmăr,Apfel,keep original notes\nfrigider,\"Kühlschrank, Eisschrank\",\"kitchen, singular\"\nfrigider,\"Kühlschrank, Eisschrank\",duplicate\n");
+        mvc.perform(multipart("/api/pairs/" + pairId + "/import").file(upload)
+                .param("direction", "REVERSE").param("packageId", "" + packageId)
+                .with(user("alice")).with(csrf()))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.newEntries").value(1))
+            .andExpect(jsonPath("$.duplicates").value(2)).andExpect(jsonPath("$.errors").value(0))
+            .andExpect(jsonPath("$.rows[0].source").value("Apfel"))
+            .andExpect(jsonPath("$.rows[0].target").value("măr"))
+            .andExpect(jsonPath("$.rows[1].source").value("Kühlschrank, Eisschrank"))
+            .andExpect(jsonPath("$.rows[1].target").value("frigider"))
+            .andExpect(jsonPath("$.rows[1].notes").value("kitchen, singular"));
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+        assertEquals(0, db.queryForObject("select count(*) from package_entry", Integer.class));
+        assertTrue(csv.upload(owner, pairId, upload, true, packageId, TranslationDirection.REVERSE).committed());
+        assertEquals(2, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+        assertEquals(2, catalog.entries(owner, pairId, packageId).size());
+        assertEquals("kitchen, singular", db.queryForObject("select notes from vocabulary_entry where target_text='frigider'", String.class));
+        assertEquals("der Apfel", db.queryForObject("select notes from vocabulary_entry where id=?", String.class, entryId));
+        assertEquals(1, score(alice, TranslationDirection.FORWARD));
+    }
+    @Test void reverseCsvWorksWithEitherLanguagePairAndRejectsInvalidRowsAtomically() throws Exception {
+        catalog.createPair(owner, new CatalogController.PairInput("German", "French"));
+        long frenchPair = db.queryForObject("select id from language_pair where target_language='French'", Long.class);
+        mvc.perform(multipart("/api/pairs/" + frenchPair + "/import")
+                .file(file("source,target\nbonjour,Guten Tag\n")).param("direction", "REVERSE").param("commit", "true")
+                .with(user("alice")).with(csrf())).andExpect(status().isOk());
+        assertEquals("Guten Tag", db.queryForObject("select source_text from vocabulary_entry where pair_id=?", String.class, frenchPair));
+        assertEquals("bonjour", db.queryForObject("select target_text from vocabulary_entry where pair_id=?", String.class, frenchPair));
+        var invalid = file("source,target\npară,Birne\n,Fehlt\n");
+        mvc.perform(multipart("/api/pairs/" + pairId + "/import").file(invalid).param("direction", "REVERSE")
+                .with(user("alice")).with(csrf())).andExpect(status().isOk()).andExpect(jsonPath("$.errors").value(1));
+        mvc.perform(multipart("/api/pairs/" + pairId + "/import").file(invalid).param("direction", "REVERSE").param("commit", "true")
+                .with(user("alice")).with(csrf())).andExpect(status().isBadRequest());
+        mvc.perform(multipart("/api/pairs/" + pairId + "/import").file(file("source,target\na,b\n"))
+                .param("direction", "SIDEWAYS").param("commit", "true").with(user("alice")).with(csrf()))
+            .andExpect(status().isBadRequest());
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry where pair_id=?", Integer.class, pairId));
+    }
+    @Test void ownerDeletionCascadesAcrossPackagesUsersAndDirectionsAndInvalidatesCards() throws Exception {
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        catalog.createPackage(owner, pairId, new CatalogController.PackageInput("Fruit"));
+        long packageId = db.queryForObject("select id from vocabulary_package", Long.class);
+        catalog.addToPackage(owner, pairId, packageId, entryId);
+        for (long userId : new long[]{alice, bob}) {
+            learning.review(userId, next(userId, TranslationDirection.FORWARD).card().ticket(), true);
+            next(userId, TranslationDirection.REVERSE);
+        }
+        String staleTicket = next(bob, TranslationDirection.REVERSE).card().ticket();
+        assertEquals(4, db.queryForObject("select count(*) from learning_progress", Integer.class));
+        assertEquals(2, db.queryForObject("select count(*) from review_history", Integer.class));
+        assertEquals(2, db.queryForObject("select count(*) from review_ticket", Integer.class));
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + entryId).with(user("alice")).with(csrf()))
+            .andExpect(status().isNoContent());
+        for (String table : new String[]{"vocabulary_entry", "package_entry", "learning_progress", "review_ticket", "review_history"})
+            assertEquals(0, db.queryForObject("select count(*) from " + table, Integer.class), table);
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_package", Integer.class));
+        assertEquals(1, db.queryForObject("select count(*) from language_pair", Integer.class));
+        assertEquals(1, db.queryForObject("select count(*) from pair_share", Integer.class));
+        mvc.perform(post("/api/learning/review").with(user("bob")).with(csrf()).contentType("application/json")
+                .content("{\"ticket\":\"" + staleTicket + "\",\"correct\":true}"))
+            .andExpect(status().isConflict());
+        assertNull(next(alice, TranslationDirection.FORWARD).card());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + entryId).with(user("alice")).with(csrf()))
+            .andExpect(status().isNotFound());
+    }
+    @Test void bulkDeletionIsAtomicAndCannotReachAnotherPair() throws Exception {
+        catalog.createEntry(owner, pairId, new CatalogController.EntryInput("Birne", "pară", ""));
+        long secondId = db.queryForObject("select id from vocabulary_entry where source_text='Birne'", Long.class);
+        catalog.createPair(owner, new CatalogController.PairInput("English", "French"));
+        long otherPair = db.queryForObject("select id from language_pair where source_language='English'", Long.class);
+        catalog.createEntry(owner, otherPair, new CatalogController.EntryInput("apple", "pomme", ""));
+        long otherId = db.queryForObject("select id from vocabulary_entry where pair_id=?", Long.class, otherPair);
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "," + otherId + "]}"))
+            .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + otherId).with(user("alice")).with(csrf()))
+            .andExpect(status().isNotFound());
+        assertEquals(3, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "," + secondId + "," + entryId + "]}"))
+            .andExpect(status().isNoContent());
+        assertEquals(0, db.queryForObject("select count(*) from vocabulary_entry where pair_id=?", Integer.class, pairId));
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry where pair_id=?", Integer.class, otherPair));
+    }
+    @Test void deletionRequiresOwnershipAndCsrf() throws Exception {
+        String payload = "{\"entryIds\":[" + entryId + "]}";
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + entryId).with(user("bob")).with(csrf()))
+            .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("bob")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isNotFound());
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + entryId).with(user("bob")).with(csrf()))
+            .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("bob")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries/" + entryId).with(user("alice")))
+            .andExpect(status().isForbidden());
+        mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("alice")).contentType("application/json").content(payload))
+            .andExpect(status().isForbidden());
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+    }
+    @Test void emptyOrInvalidBulkDeleteRequestsCannotDeleteWords() throws Exception {
+        for (String payload : new String[]{"{}", "{\"entryIds\":[]}", "{\"entryIds\":[null]}", "{\"entryIds\":[-1]}"})
+            mvc.perform(delete("/api/pairs/" + pairId + "/entries").with(user("alice")).with(csrf()).contentType("application/json").content(payload))
+                .andExpect(status().isBadRequest());
+        assertEquals(1, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+    }
+
+    @Test void swappingPreservesNotesPackagesAndEveryUsersDirectionalProgressAndHistory() throws Exception {
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        catalog.createPackage(owner, pairId, new CatalogController.PackageInput("Fruit"));
+        long packageId = db.queryForObject("select id from vocabulary_package", Long.class);
+        catalog.addToPackage(owner, pairId, packageId, entryId);
+        for (long userId : new long[]{alice, bob}) {
+            learning.review(userId, next(userId, TranslationDirection.FORWARD).card().ticket(), true);
+            next(userId, TranslationDirection.REVERSE);
+        }
+        db.update("update learning_progress set score=9.25, active=false, mastery_recall=true, score_at=?, due_at=? where user_id=? and direction='FORWARD'",
+            clock.instant().minus(Duration.ofDays(1)).atOffset(ZoneOffset.UTC), clock.instant().plus(Duration.ofDays(1)).atOffset(ZoneOffset.UTC), alice);
+        String staleTicket = next(bob, TranslationDirection.REVERSE).card().ticket();
+        var beforeProgress = db.queryForList("select * from learning_progress");
+        var beforeHistory = db.queryForList("select * from review_history");
+        mvc.perform(post("/api/pairs/" + pairId + "/entries/swap").with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "]}"))
+            .andExpect(status().isNoContent());
+        var word = db.queryForMap("select * from vocabulary_entry where id=?", entryId);
+        assertEquals("măr", word.get("SOURCE_TEXT"));
+        assertEquals("Apfel", word.get("TARGET_TEXT"));
+        assertEquals("der Apfel", word.get("NOTES"));
+        assertEquals(1, catalog.entries(owner, pairId, packageId).size());
+        for (var row : beforeProgress) {
+            var expected = new java.util.HashMap<>(row);
+            String opposite = row.get("DIRECTION").equals("FORWARD") ? "REVERSE" : "FORWARD";
+            expected.put("DIRECTION", opposite);
+            assertEquals(expected, db.queryForMap("select * from learning_progress where user_id=? and entry_id=? and direction=?", row.get("USER_ID"), entryId, opposite));
+        }
+        for (var row : beforeHistory) {
+            var expected = new java.util.HashMap<>(row);
+            expected.put("DIRECTION", row.get("DIRECTION").equals("FORWARD") ? "REVERSE" : "FORWARD");
+            assertEquals(expected, db.queryForMap("select * from review_history where id=?", row.get("ID")));
+        }
+        assertEquals(4, db.queryForObject("select count(*) from learning_progress", Integer.class));
+        assertEquals(0, db.queryForObject("select count(*) from review_ticket", Integer.class));
+        mvc.perform(post("/api/learning/review").with(user("bob")).with(csrf()).contentType("application/json")
+                .content("{\"ticket\":\"" + staleTicket + "\",\"correct\":true}"))
+            .andExpect(status().isConflict());
+        var correctedCard = next(bob, TranslationDirection.FORWARD).card();
+        assertEquals("măr", correctedCard.prompt());
+        assertEquals("Apfel", correctedCard.answer());
+        assertNotEquals(staleTicket, correctedCard.ticket());
+    }
+    @Test void swappingSingleDirectionProgressTwiceRestoresOriginalWordsAndScores() throws Exception {
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        learning.review(alice, next(alice, TranslationDirection.FORWARD).card().ticket(), true);
+        learning.review(bob, next(bob, TranslationDirection.REVERSE).card().ticket(), false);
+        var before = db.queryForList("select * from learning_progress order by user_id,direction");
+        String payload = "{\"entryIds\":[" + entryId + "," + entryId + "]}";
+        mvc.perform(post("/api/pairs/" + pairId + "/entries/swap").with(user("alice")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isNoContent());
+        assertEquals(1, score(alice, TranslationDirection.REVERSE));
+        assertEquals(0, score(bob, TranslationDirection.FORWARD));
+        assertEquals(0, db.queryForObject("select count(*) from learning_progress where user_id=? and direction='FORWARD'", Integer.class, alice));
+        assertEquals(0, db.queryForObject("select count(*) from learning_progress where user_id=? and direction='REVERSE'", Integer.class, bob));
+        mvc.perform(post("/api/pairs/" + pairId + "/entries/swap").with(user("alice")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isNoContent());
+        assertEquals(before, db.queryForList("select * from learning_progress order by user_id,direction"));
+        assertEquals("Apfel", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, entryId));
+        assertEquals("măr", db.queryForObject("select target_text from vocabulary_entry where id=?", String.class, entryId));
+    }
+    @Test void swapConflictsAreAtomicAndSelectedReverseCounterpartsCanExchangePlaces() throws Exception {
+        catalog.createEntry(owner, pairId, new CatalogController.EntryInput("măr", "Apfel", "reverse copy"));
+        long reverseId = db.queryForObject("select id from vocabulary_entry where source_text='măr'", Long.class);
+        catalog.createEntry(owner, pairId, new CatalogController.EntryInput("Birne", "pară", "other word"));
+        long otherId = db.queryForObject("select id from vocabulary_entry where source_text='Birne'", Long.class);
+        var before = db.queryForList("select * from vocabulary_entry order by id");
+        String ticket = next(alice, TranslationDirection.FORWARD).card().ticket();
+        mvc.perform(post("/api/pairs/" + pairId + "/entries/swap").with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "," + otherId + "]}"))
+            .andExpect(status().isConflict());
+        assertEquals(before, db.queryForList("select * from vocabulary_entry order by id"));
+        assertEquals(1, db.queryForObject("select count(*) from review_ticket where id=?", Integer.class, ticket));
+        mvc.perform(post("/api/pairs/" + pairId + "/entries/swap").with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "," + reverseId + "]}"))
+            .andExpect(status().isNoContent());
+        assertEquals("măr", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, entryId));
+        assertEquals("Apfel", db.queryForObject("select target_text from vocabulary_entry where id=?", String.class, entryId));
+        assertEquals("Apfel", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, reverseId));
+        assertEquals("măr", db.queryForObject("select target_text from vocabulary_entry where id=?", String.class, reverseId));
+        assertEquals("reverse copy", db.queryForObject("select notes from vocabulary_entry where id=?", String.class, reverseId));
+        assertEquals("Birne", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, otherId));
+        assertEquals(3, db.queryForObject("select count(*) from vocabulary_entry", Integer.class));
+    }
+    @Test void swappingRequiresOwnerCsrfValidIdsAndOnePair() throws Exception {
+        String url = "/api/pairs/" + pairId + "/entries/swap";
+        String payload = "{\"entryIds\":[" + entryId + "]}";
+        mvc.perform(post(url).with(user("bob")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isNotFound());
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        mvc.perform(post(url).with(user("bob")).with(csrf()).contentType("application/json").content(payload))
+            .andExpect(status().isForbidden());
+        mvc.perform(post(url).with(user("alice")).contentType("application/json").content(payload))
+            .andExpect(status().isForbidden());
+        for (String invalid : new String[]{"{}", "{\"entryIds\":[]}", "{\"entryIds\":[null]}", "{\"entryIds\":[-1]}"})
+            mvc.perform(post(url).with(user("alice")).with(csrf()).contentType("application/json").content(invalid))
+                .andExpect(status().isBadRequest());
+        catalog.createPair(owner, new CatalogController.PairInput("English", "French"));
+        long otherPair = db.queryForObject("select id from language_pair where source_language='English'", Long.class);
+        catalog.createEntry(owner, otherPair, new CatalogController.EntryInput("apple", "pomme", ""));
+        long otherId = db.queryForObject("select id from vocabulary_entry where pair_id=?", Long.class, otherPair);
+        mvc.perform(post(url).with(user("alice")).with(csrf()).contentType("application/json")
+                .content("{\"entryIds\":[" + entryId + "," + otherId + "]}"))
+            .andExpect(status().isNotFound());
+        assertEquals("Apfel", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, entryId));
+        assertEquals("apple", db.queryForObject("select source_text from vocabulary_entry where id=?", String.class, otherId));
     }
 }

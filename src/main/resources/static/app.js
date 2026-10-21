@@ -11,7 +11,10 @@ const state = {
   revealed: false,
   busy: false,
   register: false,
-  previewFile: null,
+  previewImport: null,
+  importContext: 0,
+  deleting: false,
+  swapping: false,
   context: 0,
   view: "learn",
 };
@@ -98,8 +101,19 @@ function pair() {
   return state.pairs.find((item) => item.ID === pairId());
 }
 function clearPreview() {
-  state.previewFile = null;
+  state.previewImport = null;
+  state.importContext++;
   $("import-preview").hidden = true;
+  $("commit-import").disabled = true;
+}
+function updateCsvDirection() {
+  const p = pair();
+  if (!p) return;
+  const forward = $("csv-direction").value === "FORWARD";
+  const source = forward ? p.SOURCE_LANGUAGE : p.TARGET_LANGUAGE;
+  const target = forward ? p.TARGET_LANGUAGE : p.SOURCE_LANGUAGE;
+  $("csv-direction-help").textContent =
+    `The source column contains ${source}; the target column contains ${target}.`;
 }
 function resetCard() {
   state.context++;
@@ -135,7 +149,7 @@ function showAuth() {
   state.packages = [];
   $("share-list").replaceChildren();
   $("sharing-panel").hidden = true;
-  state.previewFile = null;
+  clearPreview();
   $("auth").hidden = false;
   $("workspace").hidden = true;
   $("account").hidden = true;
@@ -186,11 +200,20 @@ async function loadPair() {
     : `Shared by ${p.OWNER_USERNAME}. Study these words and packages with your own progress.`;
   $("assign-package").closest("label").hidden = !own;
   $("assign-words").hidden = !own;
+  $("delete-words").hidden = !own;
+  $("swap-words").hidden = !own;
   $("select-page").closest("th").hidden = !own;
   $("direction").options[0].textContent =
     `${p.SOURCE_LANGUAGE} → ${p.TARGET_LANGUAGE}`;
   $("direction").options[1].textContent =
     `${p.TARGET_LANGUAGE} → ${p.SOURCE_LANGUAGE}`;
+  $("csv-direction").replaceChildren(
+    option("FORWARD", `${p.SOURCE_LANGUAGE} → ${p.TARGET_LANGUAGE}`),
+    option("REVERSE", `${p.TARGET_LANGUAGE} → ${p.SOURCE_LANGUAGE}`),
+  );
+  updateCsvDirection();
+  $("preview-source-heading").textContent = p.SOURCE_LANGUAGE;
+  $("preview-target-heading").textContent = p.TARGET_LANGUAGE;
   $("source-label").firstChild.textContent = p.SOURCE_LANGUAGE;
   $("target-label").firstChild.textContent = p.TARGET_LANGUAGE;
   $("source-heading").textContent = p.SOURCE_LANGUAGE;
@@ -296,8 +319,17 @@ function updateSelection() {
   $("assign-words").textContent = state.selected.size
     ? `Add ${state.selected.size} to package`
     : "Add to package";
-  $("assign-words").disabled = !state.selected.size;
-  $("remove-words").disabled = !state.selected.size;
+  const changingWords = state.deleting || state.swapping;
+  $("assign-words").disabled = changingWords || !state.selected.size;
+  $("remove-words").disabled = changingWords || !state.selected.size;
+  $("swap-words").textContent = state.swapping ? "Swapping…" : "Swap translations";
+  $("swap-words").disabled = changingWords || !state.selected.size;
+  $("delete-words").textContent = state.deleting
+    ? "Deleting…"
+    : state.selected.size
+      ? `Delete ${state.selected.size} ${state.selected.size === 1 ? "word" : "words"}`
+      : "Delete selected words";
+  $("delete-words").disabled = changingWords || !state.selected.size;
 }
 async function nextCard() {
   if (state.busy) return;
@@ -608,24 +640,92 @@ on("remove-words", "click", async () => {
   resetCard();
   notify("Words removed from the package.");
 });
+on("swap-words", "click", async () => {
+  if (state.swapping || state.deleting || !state.selected.size || !pair()?.IS_OWNER) return;
+  const requestedPair = pairId();
+  const ids = [...state.selected];
+  const p = pair();
+  if (!window.confirm(
+    `Swap the ${p.SOURCE_LANGUAGE} and ${p.TARGET_LANGUAGE} text for ${ids.length} selected ${ids.length === 1 ? "word" : "words"}? ` +
+    "Notes and packages stay attached. Learning progress will follow the same question and answer.",
+  )) return;
+  state.swapping = true;
+  updateSelection();
+  clearPreview();
+  try {
+    await api(`/api/pairs/${requestedPair}/entries/swap`, {
+      method: "POST",
+      json: { entryIds: ids },
+    });
+    if (!pair() || requestedPair !== pairId()) return;
+    resetCard();
+    await loadEntries();
+    notify(`Swapped translations for ${ids.length} ${ids.length === 1 ? "word" : "words"}.`);
+  } finally {
+    state.swapping = false;
+    if (pair()) updateSelection();
+  }
+});
+on("delete-words", "click", async () => {
+  if (state.deleting || state.swapping || !state.selected.size || !pair()?.IS_OWNER) return;
+  const requestedPair = pairId();
+  const ids = [...state.selected];
+  const p = pair();
+  if (!window.confirm(
+    `Delete ${ids.length} ${ids.length === 1 ? "word" : "words"} from ${p.SOURCE_LANGUAGE} / ${p.TARGET_LANGUAGE}? ` +
+    "This removes them from all packages and deletes everyone's learning progress and review history for these words. This cannot be undone.",
+  )) return;
+  state.deleting = true;
+  updateSelection();
+  clearPreview();
+  try {
+    await api(`/api/pairs/${requestedPair}/entries`, {
+      method: "DELETE",
+      json: { entryIds: ids },
+    });
+    if (!pair() || requestedPair !== pairId()) return;
+    resetCard();
+    const selected = packageId();
+    await loadPackages(selected);
+    await loadEntries();
+    notify(`Deleted ${ids.length} ${ids.length === 1 ? "word" : "words"} from the collection.`);
+  } finally {
+    state.deleting = false;
+    if (pair()) updateSelection();
+  }
+});
 on("csv-file", "change", clearPreview);
-async function importCsv(file, commit) {
+on("csv-direction", "change", () => {
+  clearPreview();
+  updateCsvDirection();
+});
+async function importCsv(request, commit) {
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", request.file);
   form.append("commit", commit);
-  if (packageId()) form.append("packageId", packageId());
-  return api(`/api/pairs/${pairId()}/import`, { method: "POST", body: form });
+  form.append("direction", request.direction);
+  if (request.packageId) form.append("packageId", request.packageId);
+  return api(`/api/pairs/${request.pairId}/import`, { method: "POST", body: form });
 }
 on("import-form", "submit", async (e) => {
   e.preventDefault();
+  clearPreview();
   const file = $("csv-file").files[0];
   if (!file) throw Error("Choose a CSV file.");
   if (file.size > 2 * 1024 * 1024)
     throw Error("Choose a CSV smaller than 2 MB.");
-  const result = await importCsv(file, false);
-  state.previewFile = file;
+  const request = {
+    file,
+    direction: $("csv-direction").value,
+    pairId: pairId(),
+    packageId: packageId(),
+  };
+  const context = state.importContext;
+  const result = await importCsv(request, false);
+  if (context !== state.importContext) return;
+  state.previewImport = request;
   $("import-summary").textContent =
-    `${result.newEntries} new words, ${result.duplicates} duplicates skipped, ${result.errors} invalid rows.`;
+    `${result.newEntries} new words, ${result.duplicates} duplicates skipped, ${result.errors} invalid rows. Preview shows the language pair's saved order.`;
   $("import-errors").replaceChildren(
     ...result.rows
       .filter((row) => row.error)
@@ -643,9 +743,7 @@ on("import-form", "submit", async (e) => {
         cell(row.row),
         cell(row.source),
         cell(row.target),
-        cell(
-          row.error || (row.duplicate ? "Already exists" : "Ready to import"),
-        ),
+        cell(row.error || (row.duplicate ? "Already exists" : "Ready to import")),
       );
       return tr;
     }),
@@ -654,21 +752,23 @@ on("import-form", "submit", async (e) => {
   $("import-preview").hidden = false;
 });
 on("commit-import", "click", async () => {
-  if (!state.previewFile) return;
+  const request = state.previewImport;
+  if (!request) return;
+  const context = state.importContext;
   $("commit-import").disabled = true;
   try {
-    const result = await importCsv(state.previewFile, true);
+    const result = await importCsv(request, true);
+    if (context !== state.importContext) return;
     clearPreview();
-    $("import-form").reset();
+    $("csv-file").value = "";
     const selected = packageId();
     await loadPackages(selected);
     await loadEntries();
     resetCard();
-    notify(
-      `Imported ${result.newEntries} new words. ${result.duplicates} duplicates skipped.`,
-    );
+    notify(`Imported ${result.newEntries} new words. ${result.duplicates} duplicates skipped.`);
   } finally {
-    $("commit-import").disabled = false;
+    if (context === state.importContext)
+      $("commit-import").disabled = !state.previewImport;
   }
 });
 on("settings-form", "submit", async (e) => {

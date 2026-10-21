@@ -55,6 +55,11 @@ button.secondary {
   background: #fff;
   border-color: #8bb1c4;
 }
+button.danger {
+  color: #9e3e4f;
+  background: #fff;
+  border-color: #cf9ba6;
+}
 button.quiet {
   color: var(--ocean);
   background: transparent;

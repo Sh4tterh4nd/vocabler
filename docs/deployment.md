@@ -20,6 +20,8 @@ Jib defaults to `vocabler:local`, matching the Compose default. Keep `VOCABLER_I
 
 The image expects an externally configured database, as supplied by Compose. For a standalone `docker run`, set `VOCABLER_DB_URL`, `VOCABLER_DB_USER`, and `VOCABLER_DB_PASSWORD`. Container health checks are configured in Compose rather than embedded in the image; other runtimes can use `/actuator/health/readiness` as an HTTP probe.
 
+The database has the private-network alias `vocabler-postgres`, and the JDBC URL uses that name. Keep the application pointed at this alias when it also joins a shared reverse-proxy network: a generic hostname such as `db` may resolve to another application's database on that network.
+
 The `db` service uses PostgreSQL 18. It has no published host port. The `postgres_data` named volume is mounted at `/var/lib/postgresql`, the correct parent location for the PostgreSQL 18 official image. See the [official image documentation](https://hub.docker.com/_/postgres).
 
 `docker compose down` stops the stack while preserving the database volume. Subsequent starts reuse the data. PostgreSQL initialization credentials only take effect on the first initialization of an empty volume; changing `.env` does not rotate an existing database password.
@@ -76,7 +78,7 @@ For a later upgrade, change the image tag (or pin an immutable `@sha256:...` dig
 
 Compose binds the application to `127.0.0.1:8080` by default. For access from family devices, serve it through an HTTPS reverse proxy and set `VOCABLER_SECURE_COOKIE=true`. Forwarded headers are enabled in Compose for that proxy. Keep direct application access restricted to the proxy; only trust forwarded headers from that route. PWA installation outside localhost requires HTTPS.
 
-The public `/actuator/health/liveness` and `/actuator/health/readiness` endpoints return status only. Readiness includes a database check. Compose invokes the dependency-free `com.vocabler.ReadinessCheck` Java probe, which exits successfully only for HTTP 200 from the readiness endpoint. No curl installation is needed inside the image. Other Actuator endpoints are not publicly exposed.
+The public `/actuator/health/liveness` and `/actuator/health/readiness` endpoints return status only. Readiness includes a database check. Compose invokes `curl`, already included in the configured Eclipse Temurin image, against the readiness endpoint. This also works with published images that do not contain the optional Java probe class. Other Actuator endpoints are not publicly exposed.
 
 There is no automatic remote-server deployment job: CI publishes the image, and Compose pulls/runs it on the deployment machine. Sessions are currently held in memory, so replacing/restarting the application requires users to log in again. Run one app replica until shared sessions are introduced.
 

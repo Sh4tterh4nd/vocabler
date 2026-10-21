@@ -36,8 +36,9 @@ See [Docker deployment and CI instructions](docs/deployment.md) for release tags
 1. Create a language pair, e.g. German / Romanian.
 2. Open Vocabulary to add entries or import `examples/german-romanian.csv`.
 3. Create packages, select words in the table, and add them to a package. An entry can belong to several packages. Removing package membership preserves the entry and its progress.
-4. Choose a direction and optionally a package, then select Start practicing.
-5. Tap/click the card to reveal the answer. Swipe left for Again or right for Knew it, or use the buttons. Keyboard users can focus the card and press Enter/Space, then tab to the answer buttons.
+4. To delete vocabulary, select its checkbox (or select a page of words), choose **Delete selected words**, and confirm. Deletion removes the words from every package and permanently removes all users' progress, review history, and pending cards for those words. Removing words from a package remains a separate action that preserves vocabulary and progress.
+5. Choose a direction and optionally a package, then select Start practicing.
+6. Tap/click the card to reveal the answer. Swipe left for Again or right for Knew it, or use the buttons. Keyboard users can focus the card and press Enter/Space, then tab to the answer buttons.
 
 ## Private vocabulary and selected-user sharing
 
@@ -48,6 +49,14 @@ As the owner, open **Share vocabulary** below the language selectors, enter an e
 Use **Stop sharing** beside a recipient to revoke access. Future catalog and learning requests are denied and outstanding review tickets are invalidated. Personal scores are retained if access is granted again. Sharing never exposes another user's learning scores or settings. There is no public catalog or automatic sharing with newly registered accounts.
 
 Authorization is checked on the server for catalog reads, every mutation, import preview and commit, queue selection, and review submission. Hidden UI controls are not the access boundary.
+
+## Correcting words imported in the wrong order
+
+In **Vocabulary**, select the affected words and choose **Swap translations**, then confirm. This exchanges the two translations for those entries in place; the language pair, word IDs, notes, and package memberships stay intact. Select a package first to limit the list to an imported batch, then use the page checkbox to select its words.
+
+Learning scores, review dates, active status, mastery recall, and review history move to the opposite direction for every user so they still describe the same question and answer. Pending cards for the affected words expire and must be loaded again. Only the collection owner can swap words, including in shared collections.
+
+The operation is atomic. If a reversed word would duplicate an unselected entry, no selected words are changed; select a smaller batch or resolve the duplicate first. Swapping both existing reverse counterparts together is supported. To undo a swap, select the same words and swap them again.
 
 ## Learning model
 
@@ -69,13 +78,24 @@ There is no forced repeat within a session: when nothing is due, add words, chan
 
 ## CSV import
 
-UTF-8 (optional BOM), comma-separated, with required `source,target` headers and optional `notes`:
+UTF-8 (optional BOM), comma-separated. Use the exact header `source,target` for two-column files, or `source,target,notes` for three-column files:
 
 ```csv
 source,target,notes
 Apfel,măr,der Apfel
 Guten Morgen,Bună dimineața,"A greeting, used in the morning"
 ```
+
+Choose **CSV language order** before previewing. The choices use the selected pair's actual languages. For a German / French pair, select **French → German** to import a file whose `source` column contains French and `target` contains German:
+
+```csv
+source,target,notes
+bonjour,Guten Tag,greeting
+```
+
+The preview shows the stored pair order: German `Guten Tag`, French `bonjour`. Notes stay attached to the word, and duplicates are checked after mapping the columns, so reverse imports do not create flipped copies or reset existing progress. This setting does not change the practice direction or its independent scores. Changing the file, CSV order, pair, or selected package clears the preview; preview again before committing.
+
+The third column is named `notes`, not `optional notes`. Each data row must have the same number of columns as the header. With a `source,target,notes` header, end a row with a comma when its notes are empty (e.g. `Apfel,măr,`).
 
 Quoted commas and multiline fields are supported. Maximum upload: 2 MB / 5,000 rows; translations: 200 characters; notes: 1,000 characters. Preview validates every row without saving. Commit revalidates and writes atomically; one invalid row prevents the entire import. Exact source/target duplicates within the pair or file are skipped. Existing notes are preserved. When a package is selected, valid imported words (including existing ones) are added to it. The preview table shows the first 20 rows.
 
@@ -112,7 +132,7 @@ On Linux/macOS, use `sh gradlew clean build`. To run only tests, use `.\gradlew.
 
 Dependencies are declared in `build.gradle.kts`. Spring Boot dependency versions are aligned using its BOM through native Gradle platform support. Java sources are compiled for Java 21 with parameter metadata retained for Spring MVC.
 
-Tests cover scoring/decay, mastery recall, user and direction isolation, bounded enrollment, graduation/refill, package selection, single-use review tickets, scheduling, CSV validation/duplicates/atomicity, registration/login/logout, CSRF enforcement, private ownership, selected-user sharing, revoked-ticket rejection, recipient write denial, and both single- and multiple-account upgrades. JavaScript syntax can be checked with `node --check src/main/resources/static/app.js` and the same command for `sw.js`.
+Tests cover scoring/decay, mastery recall, user and direction isolation, bounded enrollment, graduation/refill, package selection, single-use review tickets, scheduling, CSV direction mapping/validation/duplicates/atomicity, word deletion/cascades/atomicity, translation swaps/progress preservation/collision handling, registration/login/logout, CSRF enforcement, private ownership, selected-user sharing, revoked-ticket rejection, recipient write denial, and both single- and multiple-account upgrades. JavaScript syntax can be checked with `node --check src/main/resources/static/app.js` and the same command for `sw.js`.
 
 ## Main endpoints
 
@@ -121,9 +141,12 @@ Tests cover scoring/decay, mastery recall, user and direction isolation, bounded
 - `GET/PUT /api/pairs/{pairId}/shares` (owner-only recipient list and share-by-username)
 - `DELETE /api/pairs/{pairId}/shares/{recipientId}` (owner-only revocation)
 - `GET/POST /api/pairs/{pairId}/entries`
+- `DELETE /api/pairs/{pairId}/entries/{entryId}` (owner-only word deletion)
+- `DELETE /api/pairs/{pairId}/entries` (owner-only atomic bulk deletion; JSON `{"entryIds":[1,2]}`, at most 5,000 IDs)
+- `POST /api/pairs/{pairId}/entries/swap` (owner-only atomic swap; JSON `{"entryIds":[1,2]}`, at most 5,000 IDs)
 - `GET/POST /api/pairs/{pairId}/packages`
 - `PUT/DELETE /api/pairs/{pairId}/packages/{packageId}/entries/{entryId}`
-- `POST /api/pairs/{pairId}/import` (multipart file, commit=false/true, optional packageId)
+- `POST /api/pairs/{pairId}/import` (multipart file, commit=false/true, optional packageId, direction=FORWARD/REVERSE; default FORWARD)
 - `GET/PUT /api/learning/settings`
 - `POST /api/learning/next` (`pairId`, `direction`: FORWARD/REVERSE, optional `packageId`)
 - `POST /api/learning/review` (`ticket`, `correct`)
@@ -132,4 +155,4 @@ All vocabulary and learning APIs require login. All writes, including login and 
 
 ## Current limits
 
-This is a working first version. Editing/deleting vocabulary or language pairs, account administration, audio/pronunciation, progress charts, offline synchronization, and configurable review intervals are not yet implemented. Sharing currently applies to whole language pairs with read-only study access. Selected-package sharing, collaborative editing permissions, and ownership transfer are not yet implemented.
+This is a working first version. Editing vocabulary, deleting language pairs, account administration, audio/pronunciation, progress charts, offline synchronization, and configurable review intervals are not yet implemented. Sharing currently applies to whole language pairs with read-only study access. Selected-package sharing, collaborative editing permissions, and ownership transfer are not yet implemented.

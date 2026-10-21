@@ -25,7 +25,8 @@ class CsvImportController {
 
     @PostMapping @Transactional
     Result upload(Principal user, @PathVariable long pairId, @RequestParam MultipartFile file,
-                  @RequestParam(defaultValue="false") boolean commit, @RequestParam(required=false) Long packageId) {
+                  @RequestParam(defaultValue="false") boolean commit, @RequestParam(required=false) Long packageId,
+                  @RequestParam(defaultValue="FORWARD") TranslationDirection direction) {
         access.requireOwner(access.userId(user.getName()), pairId);
         // Serialize imports within a pair, including the duplicate check and commit.
         db.queryForObject("select id from language_pair where id=? for update", Long.class, pairId);
@@ -43,11 +44,14 @@ class CsvImportController {
                 Map<String,Integer> headers = parser.getHeaderMap();
                 if (!headers.containsKey("source") || !headers.containsKey("target") ||
                     headers.keySet().stream().anyMatch(h -> !Set.of("source", "target", "notes").contains(h)))
-                    throw new ResponseStatusException(BAD_REQUEST, "Use CSV headers source,target and optional notes");
+                    throw new ResponseStatusException(BAD_REQUEST, "Use CSV headers source,target (two columns) or source,target,notes (three columns). Each row must match the header column count.");
                 for (CSVRecord record : parser) {
                     if (rows.size() >= 5000) throw new ResponseStatusException(BAD_REQUEST, "Import at most 5000 rows at a time");
-                    String source = record.isSet("source") ? record.get("source").strip() : "";
-                    String target = record.isSet("target") ? record.get("target").strip() : "";
+                    String csvSource = record.isSet("source") ? record.get("source").strip() : "";
+                    String csvTarget = record.isSet("target") ? record.get("target").strip() : "";
+                    // Normalize to the pair's stored order before duplicate detection, preview or commit.
+                    String source = direction == TranslationDirection.FORWARD ? csvSource : csvTarget;
+                    String target = direction == TranslationDirection.FORWARD ? csvTarget : csvSource;
                     String notes = record.isSet("notes") ? record.get("notes").strip() : "";
                     String error = !record.isConsistent() ? "Column count does not match the header" :
                         source.isBlank() || target.isBlank() ? "Both translations are required" :
@@ -65,10 +69,11 @@ class CsvImportController {
         int duplicates = (int) rows.stream().filter(Row::duplicate).count();
         int newEntries = rows.size() - errors - duplicates;
         if (commit && errors > 0) throw new ResponseStatusException(BAD_REQUEST, "Fix all invalid rows before importing; nothing was saved");
+        Set<Key> assignedToPackage = new HashSet<>();
         if (commit) for (Row row : rows) {
             if (!row.duplicate()) db.update("insert into vocabulary_entry(pair_id, source_text, target_text, notes) values (?, ?, ?, ?)",
                 pairId, row.source(), row.target(), row.notes());
-            if (packageId != null) {
+            if (packageId != null && assignedToPackage.add(new Key(row.source(), row.target()))) {
                 Long entryId = db.queryForObject("select id from vocabulary_entry where pair_id=? and source_text=? and target_text=?", Long.class, pairId, row.source(), row.target());
                 db.update("insert into package_entry(package_id, entry_id) select ?, ? where not exists (select 1 from package_entry where package_id=? and entry_id=?)", packageId, entryId, packageId, entryId);
             }

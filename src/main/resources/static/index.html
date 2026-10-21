@@ -232,9 +232,17 @@
                 <form id="import-form">
                   <h3>Import CSV</h3>
                   <p class="small">
-                    UTF-8, with headers <code>source,target,notes</code>. Notes
-                    are optional. Up to 5,000 rows.
+                    UTF-8, with headers <code>source,target</code>, or
+                    <code>source,target,notes</code> when including notes.
+                    Each row must have the same number of columns as the header.
+                    Quote fields containing commas. Up to 5,000 rows.
                   </p>
+                  <label for="csv-direction">CSV language order</label>
+                  <select id="csv-direction" aria-describedby="csv-direction-help">
+                    <option value="FORWARD">First language → second language</option>
+                    <option value="REVERSE">Second language → first language</option>
+                  </select>
+                  <p id="csv-direction-help" class="small"></p>
                   <label
                     >CSV file<input
                       id="csv-file"
@@ -260,8 +268,8 @@
                   <thead>
                     <tr>
                       <th>Row</th>
-                      <th>First language</th>
-                      <th>Second language</th>
+                      <th id="preview-source-heading">First language</th>
+                      <th id="preview-target-heading">Second language</th>
                       <th>Result</th>
                     </tr>
                   </thead>
@@ -284,6 +292,12 @@
                 Add to package</button
               ><button id="remove-words" class="quiet" hidden>
                 Remove from this package
+              </button>
+              <button id="swap-words" class="secondary" type="button" disabled hidden>
+                Swap translations
+              </button>
+              <button id="delete-words" class="danger" type="button" disabled hidden>
+                Delete selected words
               </button>
             </div>
             <div class="table-scroll">

@@ -94,8 +94,13 @@ class LearningService {
         var issued = tickets.getFirst();
         long entryId = ((Number) issued.get("ENTRY_ID")).longValue();
         String direction = (String) issued.get("DIRECTION");
-        long pairId = db.queryForObject("select pair_id from vocabulary_entry where id=?", Long.class, entryId);
+        var pairs = db.queryForList("select pair_id from vocabulary_entry where id=?", Long.class, entryId);
+        if (pairs.isEmpty()) throw new ResponseStatusException(CONFLICT, "This word was deleted. Load another card.");
+        long pairId = pairs.getFirst();
         access.requireReadForUpdate(userId, pairId);
+        // A deletion may have cascaded to the ticket while this review waited for the pair lock.
+        if (db.queryForObject("select count(*) from review_ticket where id=? and user_id=?", Integer.class, ticket, userId) == 0)
+            throw new ResponseStatusException(CONFLICT, "This review is no longer available. Load another card.");
         Progress progress = db.queryForObject("select * from learning_progress where user_id=? and entry_id=? and direction=?", (rs, row) -> new Progress(
             entryId, rs.getDouble("score"), rs.getObject("score_at", OffsetDateTime.class).toInstant(),
             rs.getObject("due_at", OffsetDateTime.class).toInstant(), rs.getBoolean("active"), rs.getBoolean("mastery_recall"), "", "", ""), userId, entryId, direction);
