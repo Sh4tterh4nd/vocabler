@@ -155,16 +155,16 @@
               <p id="learning-direction"></p>
               <p id="active-count">Your learning list fills as you practice.</p>
               <p class="small">
-                Each direction has its own score. Familiar words make room for
+                Each direction has its own score and correct-answer streak. Familiar words make room for
                 new ones, and return for an occasional review.
               </p>
-              <button id="start-session">Start practicing</button>
+              <button id="start-session">Check for cards</button>
             </aside>
             <div class="card-area">
               <div id="card-placeholder" class="card-placeholder">
                 <span class="card-mark" aria-hidden="true">Aa</span>
-                <h3>Ready when you are</h3>
-                <p>Start practicing to reveal your next word.</p>
+                <h3>Loading your next card…</h3>
+                <p>Cards appear here automatically when words are due.</p>
               </div>
               <div id="flashcard-wrap" hidden>
                 <p id="card-caption" class="card-caption"></p>
@@ -348,7 +348,7 @@
                   step="0.1"
                   required /></label
               ><label
-                >Score gained for a correct answer<input
+                >Base score gained for a correct answer<input
                   name="correctGain"
                   type="number"
                   min="0.1"
@@ -373,6 +373,8 @@
                   required
               /></label>
               <p class="small">
+                Consecutive correct answers earn 1×, 2×, 3×, then 4× the base gain.
+                A missed word resets its streak.
                 Decay stops at 8. Set it to 0 to disable decay. Changes to decay
                 use the time since each word’s last review. Words at 10 return
                 only after decay and their next scheduled review.

@@ -10,12 +10,14 @@ const state = {
   card: null,
   revealed: false,
   busy: false,
+  pendingCard: false,
   register: false,
   previewImport: null,
   importContext: 0,
   deleting: false,
   swapping: false,
   context: 0,
+  catalogContext: 0,
   view: "learn",
 };
 let statusTimer;
@@ -121,11 +123,11 @@ function resetCard() {
   state.revealed = false;
   $("flashcard-wrap").hidden = true;
   $("card-placeholder").hidden = false;
-  $("card-placeholder").querySelector("h3").textContent = "Ready when you are";
+  $("card-placeholder").querySelector("h3").textContent = "Your next card";
   $("card-placeholder").querySelector("p").textContent =
-    "Start practicing to reveal your next word.";
-  $("start-session").disabled = false;
-  $("start-session").textContent = "Start practicing";
+    "Cards load automatically. You can also check for cards again.";
+  $("start-session").disabled = state.busy;
+  $("start-session").textContent = "Check for cards";
 }
 function showAuth() {
   clearTimeout(statusTimer);
@@ -135,6 +137,8 @@ function showAuth() {
   $("auth-form").reset();
   $("settings-form").reset();
   state.view = "learn";
+  state.catalogContext++;
+  state.pendingCard = false;
   document.querySelectorAll("[data-view]").forEach((tab) => {
     if (tab.dataset.view === "learn") tab.setAttribute("aria-current", "page");
     else tab.removeAttribute("aria-current");
@@ -184,6 +188,8 @@ async function loadPairs(preferred) {
 }
 async function loadPair() {
   resetCard();
+  const context = ++state.catalogContext;
+  $("package-select").replaceChildren(option("", "All words"));
   clearPreview();
   state.selected.clear();
   state.page = 0;
@@ -220,15 +226,23 @@ async function loadPair() {
   $("target-heading").textContent = p.TARGET_LANGUAGE;
   updateDirection();
   await loadPackages();
-  await loadEntries();
-  if (p.IS_OWNER) await loadShares();
+  if (context !== state.catalogContext) return;
+  await Promise.all([
+    ensureCard(),
+    loadEntries(),
+    ...(p.IS_OWNER ? [loadShares()] : []),
+  ]);
 }
 function updateDirection() {
   $("learning-direction").textContent =
     $("direction").selectedOptions[0].textContent;
 }
 async function loadPackages(preferred = "") {
-  state.packages = await api(`/api/pairs/${pairId()}/packages`);
+  const context = state.catalogContext;
+  const requestedPair = pairId();
+  const packages = await api(`/api/pairs/${requestedPair}/packages`);
+  if (context !== state.catalogContext || requestedPair !== pairId()) return;
+  state.packages = packages;
   $("package-select").replaceChildren(
     option("", "All words"),
     ...state.packages.map((p) => option(p.ID, `${p.NAME} (${p.ENTRY_COUNT})`)),
@@ -241,8 +255,13 @@ async function loadPackages(preferred = "") {
   );
 }
 async function loadEntries() {
-  const query = packageId() ? `?packageId=${packageId()}` : "";
-  state.entries = await api(`/api/pairs/${pairId()}/entries${query}`);
+  const context = state.catalogContext;
+  const requestedPair = pairId();
+  const selectedPackage = packageId();
+  const query = selectedPackage ? `?packageId=${selectedPackage}` : "";
+  const entries = await api(`/api/pairs/${requestedPair}/entries${query}`);
+  if (context !== state.catalogContext || requestedPair !== pairId() || selectedPackage !== packageId()) return;
+  state.entries = entries;
   state.selected.clear();
   state.page = 0;
   renderEntries();
@@ -331,11 +350,29 @@ function updateSelection() {
       : "Delete selected words";
   $("delete-words").disabled = changingWords || !state.selected.size;
 }
+async function ensureCard() {
+  if (state.view === "learn" && pair() && !state.card && !$("workspace").hidden)
+    await nextCard();
+}
+async function loadPendingCard() {
+  if (!state.pendingCard) return;
+  state.pendingCard = false;
+  await ensureCard();
+}
 async function nextCard() {
-  if (state.busy) return;
+  if (!pair() || $("workspace").hidden) return;
+  if (state.busy) {
+    state.pendingCard = true;
+    return;
+  }
+  state.pendingCard = false;
   state.busy = true;
   $("start-session").disabled = true;
   const context = state.context;
+  if (!state.card) {
+    $("card-placeholder").querySelector("h3").textContent = "Loading your next card…";
+    $("card-placeholder").querySelector("p").textContent = "Finding a word in this selection.";
+  }
   try {
     const result = await api("/api/learning/next", {
       method: "POST",
@@ -359,9 +396,18 @@ async function nextCard() {
         "No words are due in this selection. Add vocabulary, choose another package, or come back later.";
     } else renderCard();
     $("start-session").textContent = "Check for cards";
+  } catch (error) {
+    if (context === state.context) {
+      if (!state.card) {
+        $("card-placeholder").querySelector("h3").textContent = "Couldn’t load cards";
+        $("card-placeholder").querySelector("p").textContent = "Check your connection, then choose Check for cards to try again.";
+      }
+      throw error;
+    }
   } finally {
     state.busy = false;
     $("start-session").disabled = false;
+    await loadPendingCard();
   }
 }
 function renderCard() {
@@ -370,7 +416,8 @@ function renderCard() {
   const p = pair();
   const forward = $("direction").value === "FORWARD";
   $("card-caption").textContent =
-    `${card.maintenance ? "Maintenance review" : "Learning"} · Score ${card.score.toFixed(1)} / 10`;
+    `${card.maintenance ? "Maintenance review" : "Learning"} · Score ${card.score.toFixed(1)} / 10` +
+    (card.correctStreak ? ` · ${card.correctStreak} correct in a row` : "");
   $("card-language").textContent = state.revealed
     ? forward
       ? p.TARGET_LANGUAGE
@@ -394,6 +441,7 @@ async function review(correct) {
   if (!state.card || !state.revealed || state.busy) return;
   state.busy = true;
   $("again").disabled = $("knew").disabled = true;
+  $("start-session").disabled = true;
   const context = state.context;
   try {
     const result = await api("/api/learning/review", {
@@ -402,7 +450,10 @@ async function review(correct) {
     });
     if (context !== state.context) return;
     notify(
-      `${correct ? "Remembered" : "Keep practicing"} · Score ${result.after.toFixed(1)} / 10`,
+      `${correct ? "Remembered" : "Keep practicing"} · Score ${result.after.toFixed(1)} / 10` +
+        (correct && result.correctStreak > 1
+          ? ` · ${result.correctStreak} in a row (+${(result.after - result.before).toFixed(1)})`
+          : ""),
     );
     state.card = null;
   } catch (error) {
@@ -411,6 +462,8 @@ async function review(correct) {
   } finally {
     state.busy = false;
     $("again").disabled = $("knew").disabled = false;
+    $("start-session").disabled = false;
+    if (context !== state.context) await loadPendingCard();
   }
   if (context === state.context) await nextCard();
 }
@@ -482,13 +535,15 @@ on("pair-form", "submit", async (e) => {
   notify("Language pair created. Add your first words in Vocabulary.");
 });
 on("pair-select", "change", loadPair);
-on("direction", "change", () => {
+on("direction", "change", async () => {
   resetCard();
   updateDirection();
+  await ensureCard();
 });
 on("package-select", "change", async () => {
   resetCard();
   clearPreview();
+  await ensureCard();
   await loadEntries();
 });
 document.querySelectorAll("[data-view]").forEach((button) =>
@@ -501,6 +556,7 @@ document.querySelectorAll("[data-view]").forEach((button) =>
       });
       for (const name of ["learn", "vocabulary", "settings"])
         $(`${name}-view`).hidden = name !== state.view;
+      if (state.view === "learn") await ensureCard();
       if (state.view === "settings") {
         const settings = await api("/api/learning/settings");
         for (const [key, value] of Object.entries(settings))

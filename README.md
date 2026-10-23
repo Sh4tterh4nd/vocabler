@@ -37,7 +37,7 @@ See [Docker deployment and CI instructions](docs/deployment.md) for release tags
 2. Open Vocabulary to add entries or import `examples/german-romanian.csv`.
 3. Create packages, select words in the table, and add them to a package. An entry can belong to several packages. Removing package membership preserves the entry and its progress.
 4. To delete vocabulary, select its checkbox (or select a page of words), choose **Delete selected words**, and confirm. Deletion removes the words from every package and permanently removes all users' progress, review history, and pending cards for those words. Removing words from a package remains a separate action that preserves vocabulary and progress.
-5. Choose a direction and optionally a package, then select Start practicing.
+5. Open Learn. A due card appears automatically after login or when you change the pair, direction, or package. Use Check for cards to refresh the queue.
 6. Tap/click the card to reveal the answer. Swipe left for Again or right for Knew it, or use the buttons. Keyboard users can focus the card and press Enter/Space, then tab to the answer buttons.
 
 ## Private vocabulary and selected-user sharing
@@ -54,7 +54,7 @@ Authorization is checked on the server for catalog reads, every mutation, import
 
 In **Vocabulary**, select the affected words and choose **Swap translations**, then confirm. This exchanges the two translations for those entries in place; the language pair, word IDs, notes, and package memberships stay intact. Select a package first to limit the list to an imported batch, then use the page checkbox to select its words.
 
-Learning scores, review dates, active status, mastery recall, and review history move to the opposite direction for every user so they still describe the same question and answer. Pending cards for the affected words expire and must be loaded again. Only the collection owner can swap words, including in shared collections.
+Learning scores, correct-answer streaks, review dates, active status, mastery recall, and review history move to the opposite direction for every user so they still describe the same question and answer. Pending cards for the affected words expire and must be loaded again. Only the collection owner can swap words, including in shared collections.
 
 The operation is atomic. If a reversed word would duplicate an unselected entry, no selected words are changed; select a smaller batch or resolve the duplicate first. Swapping both existing reverse counterparts together is supported. To undo a swap, select the same words and swap them again.
 
@@ -63,7 +63,8 @@ The operation is atomic. If a reversed word would duplicate an unselected entry,
 The unique progress key is **user + vocabulary entry + translation direction**. German → Romanian and Romanian → German never update one another. Each has independent scores, review dates, active membership, and mastery recall eligibility.
 
 - Scores range from 0 to 10 (fractional values, stored to three decimal places after a review).
-- Defaults: correct +1; incorrect −2; graduation at 8.
+- Defaults: base correct gain +1; incorrect −2; graduation at 8.
+- Each word has its own consecutive-correct streak per user and translation direction. Correct reviews earn 1×, 2×, 3×, then at most 4× the configured base gain. With defaults, a new word advances 0 → 1 → 3 → 6 → 10 in four correct scheduled reviews. A miss resets that word’s directional streak to 0 and applies the normal penalty. Streaks persist across sessions; existing history is used to recover them on upgrade, preserving scores and review dates.
 - Each user has up to 75 active entries **per language pair and direction**. This is configurable from 10 to 200.
 - Graduating entries free a place for new words. Practice in a selected package parks active entries outside that package to make room, preserving all scores and review dates.
 - Incorrect maintenance reviews rejoin the active list when there is room. If full, they remain eligible for maintenance and later enrollment.

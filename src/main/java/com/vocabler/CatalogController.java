@@ -28,7 +28,7 @@ class CatalogController {
     record EntryKey(String source, String target) {}
     record ProgressKey(long userId, long entryId, String direction) {}
     record StoredProgress(long userId, long entryId, String direction, double score, OffsetDateTime scoreAt,
-                          OffsetDateTime dueAt, boolean active, boolean masteryRecall) {}
+                          OffsetDateTime dueAt, boolean active, boolean masteryRecall, int correctStreak) {}
     record PackageInput(@NotBlank @Size(max=100) String name) {}
     private final JdbcTemplate db;
     private final CatalogAccess access;
@@ -99,7 +99,7 @@ class CatalogController {
         var progress = db.query("select * from learning_progress where entry_id in (" + placeholders + ")",
             (rs, row) -> new StoredProgress(rs.getLong("user_id"), rs.getLong("entry_id"), rs.getString("direction"),
                 rs.getDouble("score"), rs.getObject("score_at", OffsetDateTime.class), rs.getObject("due_at", OffsetDateTime.class),
-                rs.getBoolean("active"), rs.getBoolean("mastery_recall")), parameters);
+                rs.getBoolean("active"), rs.getBoolean("mastery_recall"), rs.getInt("correct_streak")), parameters);
         var progressKeys = new HashSet<ProgressKey>();
         for (var item : progress) progressKeys.add(new ProgressKey(item.userId(), item.entryId(), item.direction()));
         // Reserve unique temporary values so a selected A/B and B/A can exchange places safely.
@@ -113,8 +113,8 @@ class CatalogController {
         for (var item : progress) {
             String opposite = item.direction().equals("FORWARD") ? "REVERSE" : "FORWARD";
             if (progressKeys.contains(new ProgressKey(item.userId(), item.entryId(), opposite)))
-                db.update("update learning_progress set score=?, score_at=?, due_at=?, active=?, mastery_recall=? where user_id=? and entry_id=? and direction=?",
-                    item.score(), item.scoreAt(), item.dueAt(), item.active(), item.masteryRecall(), item.userId(), item.entryId(), opposite);
+                db.update("update learning_progress set score=?, score_at=?, due_at=?, active=?, mastery_recall=?, correct_streak=? where user_id=? and entry_id=? and direction=?",
+                    item.score(), item.scoreAt(), item.dueAt(), item.active(), item.masteryRecall(), item.correctStreak(), item.userId(), item.entryId(), opposite);
             else
                 db.update("update learning_progress set direction=? where user_id=? and entry_id=? and direction=?",
                     opposite, item.userId(), item.entryId(), item.direction());

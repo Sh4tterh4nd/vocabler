@@ -74,6 +74,42 @@ class ApplicationIntegrationTest {
         assertEquals(0, score(alice, TranslationDirection.REVERSE));
         assertEquals(0, score(bob, TranslationDirection.FORWARD));
     }
+    @Test void streakGainsPersistAndMasterANewWordAfterFourScheduledReviews() throws Exception {
+        double[] expected = {1, 3, 6, 10};
+        for (int index = 0; index < expected.length; index++) {
+            var card = next(alice, TranslationDirection.FORWARD).card();
+            assertEquals(index, card.correctStreak());
+            mvc.perform(post("/api/learning/review").with(user("alice")).with(csrf()).contentType("application/json")
+                    .content("{\"ticket\":\"" + card.ticket() + "\",\"correct\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.after").value(expected[index]))
+                .andExpect(jsonPath("$.correctStreak").value(index + 1));
+            assertEquals(index + 1, db.queryForObject("select correct_streak from learning_progress where user_id=?", Integer.class, alice));
+            assertNull(next(alice, TranslationDirection.FORWARD).card(), "Reviews still respect their scheduled interval");
+            if (index < expected.length - 1)
+                db.update("update learning_progress set due_at=? where user_id=?", clock.instant().minusSeconds(1).atOffset(ZoneOffset.UTC), alice);
+        }
+        assertFalse(db.queryForObject("select active from learning_progress where user_id=?", Boolean.class, alice));
+        assertTrue(db.queryForObject("select mastery_recall from learning_progress where user_id=?", Boolean.class, alice));
+    }
+    @Test void streaksArePersonalToEachWordAndDirectionAndResetOnAMiss() {
+        for (int index = 0; index < 2; index++) {
+            learning.review(alice, next(alice, TranslationDirection.FORWARD).card().ticket(), true);
+            db.update("update learning_progress set due_at=? where user_id=?", clock.instant().minusSeconds(1).atOffset(ZoneOffset.UTC), alice);
+        }
+        assertEquals(2, next(alice, TranslationDirection.FORWARD).card().correctStreak());
+        assertEquals(0, next(alice, TranslationDirection.REVERSE).card().correctStreak());
+        sharing.share(owner, pairId, new SharingController.ShareInput("bob"));
+        assertEquals(0, next(bob, TranslationDirection.FORWARD).card().correctStreak());
+        catalog.createEntry(owner, pairId, new CatalogController.EntryInput("Brot", "pâine", ""));
+        next(alice, TranslationDirection.FORWARD);
+        assertEquals(0, db.queryForObject("select correct_streak from learning_progress where user_id=? and entry_id<>?", Integer.class, alice, entryId));
+        var missed = learning.review(alice, next(alice, TranslationDirection.FORWARD).card().ticket(), false);
+        assertEquals(1, missed.after());
+        assertEquals(0, missed.correctStreak());
+        assertEquals(0, db.queryForObject("select correct_streak from learning_progress where user_id=? and entry_id=? and direction='FORWARD'", Integer.class, alice, entryId));
+        db.update("update learning_progress set due_at=? where user_id=? and entry_id=?", clock.instant().minusSeconds(60).atOffset(ZoneOffset.UTC), alice, entryId);
+        assertEquals(2, learning.review(alice, next(alice, TranslationDirection.FORWARD).card().ticket(), true).after());
+    }
     @Test void queueIsBoundedAndRepeatedLoadsReuseTheTicket() {
         addWords(104);
         var first = next(alice, TranslationDirection.FORWARD);
@@ -113,6 +149,7 @@ class ApplicationIntegrationTest {
         learning.review(alice, card.ticket(), true);
         assertThrows(ResponseStatusException.class, () -> learning.review(alice, card.ticket(), true));
         assertEquals(1, score(alice, TranslationDirection.FORWARD));
+        assertEquals(1, db.queryForObject("select correct_streak from learning_progress where user_id=?", Integer.class, alice));
     }
     @Test void expiredTicketsAreRejected() {
         var card = next(alice, TranslationDirection.FORWARD).card();

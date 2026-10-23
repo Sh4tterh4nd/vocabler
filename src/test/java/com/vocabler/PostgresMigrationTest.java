@@ -12,6 +12,21 @@ class PostgresMigrationTest {
     @Test void singleAccountUpgradeAssignsTheExistingCatalog() { upgrade(false); }
     @Test void multipleAccountUpgradePreservesPrivateUnassignedVocabulary() { upgrade(true); }
 
+    @Test void existingReviewHistoryBackfillsStreaksOnPostgres() {
+        String url = System.getenv("TEST_DB_URL");
+        assertNotNull(url);
+        String user = System.getenv("TEST_DB_USER");
+        String password = System.getenv("TEST_DB_PASSWORD");
+        String schema = "streak_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        var admin = new JdbcTemplate(new DriverManagerDataSource(url, user, password));
+        admin.execute("create schema " + schema);
+        try {
+            CorrectStreakMigrationTest.verifyUpgrade(url + (url.contains("?") ? "&" : "?") + "currentSchema=" + schema, user, password);
+        } finally {
+            admin.execute("drop schema " + schema + " cascade");
+        }
+    }
+
     private void upgrade(boolean multipleUsers) {
         String url = System.getenv("TEST_DB_URL");
         assertNotNull(url, "Run this test through the postgresTest Gradle task");

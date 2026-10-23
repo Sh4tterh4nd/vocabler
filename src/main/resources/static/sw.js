@@ -1,4 +1,4 @@
-const CACHE = "vocabler-shell-v4";
+const CACHE = "vocabler-shell-v5";
 const SHELL = [
   "/",
   "/index.html",

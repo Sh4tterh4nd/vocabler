@@ -10,9 +10,9 @@ import static org.springframework.http.HttpStatus.*;
 
 @Service
 class LearningService {
-    record Card(String ticket, long entryId, String prompt, String answer, String notes, double score, boolean maintenance) {}
+    record Card(String ticket, long entryId, String prompt, String answer, String notes, double score, boolean maintenance, int correctStreak) {}
     record Queue(Card card, int activeCount, int activeLimit) {}
-    record Progress(long entryId, double score, Instant scoreAt, Instant dueAt, boolean active, boolean masteryRecall,
+    record Progress(long entryId, double score, Instant scoreAt, Instant dueAt, boolean active, boolean masteryRecall, int correctStreak,
                     String source, String target, String notes) {}
     private final JdbcTemplate db;
     private final Clock clock;
@@ -66,7 +66,7 @@ class LearningService {
         }
         List<Progress> due = db.query("select p.*, e.source_text, e.target_text, e.notes from learning_progress p join vocabulary_entry e on e.id=p.entry_id where p.user_id=? and p.direction=? and e.pair_id=? and p.due_at<=?" + packageClause + " order by p.due_at, p.score, p.entry_id", (rs, row) -> new Progress(
             rs.getLong("entry_id"), rs.getDouble("score"), rs.getObject("score_at", OffsetDateTime.class).toInstant(),
-            rs.getObject("due_at", OffsetDateTime.class).toInstant(), rs.getBoolean("active"), rs.getBoolean("mastery_recall"),
+            rs.getObject("due_at", OffsetDateTime.class).toInstant(), rs.getBoolean("active"), rs.getBoolean("mastery_recall"), rs.getInt("correct_streak"),
             rs.getString("source_text"), rs.getString("target_text"), rs.getString("notes")), userId, direction.name(), pairId, timestamp(now));
         due = due.stream().filter(p -> LearningPolicy.effectiveScore(p.score(), p.scoreAt(), now, settings.dailyDecay()) < 10).toList();
         long reviews = db.queryForObject("select count(*) from review_history h join vocabulary_entry e on e.id=h.entry_id where h.user_id=? and h.direction=? and e.pair_id=?", Long.class, userId, direction.name(), pairId);
@@ -82,7 +82,7 @@ class LearningService {
         boolean forward = direction == TranslationDirection.FORWARD;
         return new Queue(new Card(ticket, selected.entryId(), forward ? selected.source() : selected.target(),
             forward ? selected.target() : selected.source(), selected.notes(),
-            LearningPolicy.effectiveScore(selected.score(), selected.scoreAt(), now, settings.dailyDecay()), !selected.active()), activeCount, settings.activeLimit());
+            LearningPolicy.effectiveScore(selected.score(), selected.scoreAt(), now, settings.dailyDecay()), !selected.active(), selected.correctStreak()), activeCount, settings.activeLimit());
     }
 
     @Transactional
@@ -103,17 +103,17 @@ class LearningService {
             throw new ResponseStatusException(CONFLICT, "This review is no longer available. Load another card.");
         Progress progress = db.queryForObject("select * from learning_progress where user_id=? and entry_id=? and direction=?", (rs, row) -> new Progress(
             entryId, rs.getDouble("score"), rs.getObject("score_at", OffsetDateTime.class).toInstant(),
-            rs.getObject("due_at", OffsetDateTime.class).toInstant(), rs.getBoolean("active"), rs.getBoolean("mastery_recall"), "", "", ""), userId, entryId, direction);
+            rs.getObject("due_at", OffsetDateTime.class).toInstant(), rs.getBoolean("active"), rs.getBoolean("mastery_recall"), rs.getInt("correct_streak"), "", "", ""), userId, entryId, direction);
         LearningPolicy.Settings settings = settings(userId);
-        LearningPolicy.Outcome outcome = LearningPolicy.review(progress.score(), progress.scoreAt(), progress.masteryRecall(), correct, now, settings);
+        LearningPolicy.Outcome outcome = LearningPolicy.review(progress.score(), progress.scoreAt(), progress.masteryRecall(), progress.correctStreak(), correct, now, settings);
         boolean active = progress.active() && outcome.after() < settings.graduationScore();
         // Failed maintenance returns to the active list when a slot is free; otherwise it stays due for maintenance.
         if (!active && outcome.after() < settings.graduationScore()) {
             int count = db.queryForObject("select count(*) from learning_progress p join vocabulary_entry e on e.id=p.entry_id where p.user_id=? and p.direction=? and p.active=true and e.pair_id=(select pair_id from vocabulary_entry where id=?)", Integer.class, userId, direction, entryId);
             active = count < settings.activeLimit();
         }
-        db.update("update learning_progress set score=?,score_at=?,due_at=?,active=?,mastery_recall=? where user_id=? and entry_id=? and direction=?",
-            outcome.after(), timestamp(now), timestamp(outcome.dueAt()), active, outcome.masteryRecall(), userId, entryId, direction);
+        db.update("update learning_progress set score=?,score_at=?,due_at=?,active=?,mastery_recall=?,correct_streak=? where user_id=? and entry_id=? and direction=?",
+            outcome.after(), timestamp(now), timestamp(outcome.dueAt()), active, outcome.masteryRecall(), outcome.correctStreak(), userId, entryId, direction);
         db.update("insert into review_history(user_id,entry_id,direction,correct,score_before,score_after,reviewed_at) values (?,?,?,?,?,?,?)",
             userId, entryId, direction, correct, outcome.before(), outcome.after(), timestamp(now));
         db.update("delete from review_ticket where id=?", ticket);
